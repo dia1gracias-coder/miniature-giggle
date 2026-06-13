@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "GG Wallet",
+  "description": "GG Wallet \u2014 an open-source, community wallet to interact with the Gonka.ai blockchain: send, receive, stake, and more.",
+  "version": "0.1.9",
+  "icons": {
+    "16": "src/assets/icons/icon16.png",
+    "48": "src/assets/icons/icon48.png",
+    "128": "src/assets/icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "src/popup/index.html",
+    "default_icon": {
+      "16": "src/assets/icons/icon16.png",
+      "48": "src/assets/icons/icon48.png",
+      "128": "src/assets/icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*"
+      ],
+      "js": [
+        "src/provider/content.ts"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/provider/inpage.js"
+      ],
+      "matches": [
+        "https://*/*"
+      ]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}

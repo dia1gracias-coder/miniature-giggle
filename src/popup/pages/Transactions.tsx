@@ -1,0 +1,197 @@
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useWalletStore } from "@/popup/store";
+import { fetchTransactions, Transaction } from "@/lib/api";
+import { getCache, setCache, cacheKey, isCacheFresh } from "@/lib/cache";
+import Layout from "@/popup/components/Layout";
+import TxItem from "@/popup/components/TxItem";
+import Spinner from "@/popup/components/Spinner";
+
+type Filter = "all" | "sent" | "received";
+
+export default function Transactions() {
+  const { address, tokenBalances } = useWalletStore();
+
+  const symbolMap = useMemo<Record<string, string>>(() => {
+    const map: Record<string, string> = {};
+    for (const t of tokenBalances) {
+      map[t.denom] = t.symbol;
+    }
+    return map;
+  }, [tokenBalances]);
+  const [txs, setTxs] = useState<Transaction[]>([]);
+  const [hasCached, setHasCached] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [total, setTotal] = useState(0);
+  const mountedRef = useRef(true);
+
+  const PAGE_SIZE = 20;
+
+  // Load cached, then fetch fresh only if stale
+  const loadInitial = useCallback(async () => {
+    if (!address) return;
+
+    const key = cacheKey(address, `txs_${filter}`);
+
+    // 1. Load cache
+    const cached = await getCache<{ txs: Transaction[]; total: number; hasMore: boolean }>(key);
+    if (cached && cached.data.txs.length > 0) {
+      setTxs(cached.data.txs);
+      setTotal(cached.data.total);
+      setHasMore(cached.data.hasMore);
+      setHasCached(true);
+    }
+
+    // 2. Skip refresh if cache is fresh (< 30s old)
+    if (isCacheFresh(cached)) return;
+
+    // 3. Fetch fresh in background
+    setRefreshing(true);
+
+    try {
+      const data = await fetchTransactions(address, 1, PAGE_SIZE, filter);
+      if (mountedRef.current) {
+        setTxs(data.transactions);
+        setTotal(data.total);
+        setHasMore(data.hasMore);
+        setHasCached(true);
+        setPage(1);
+        setCache(key, {
+          txs: data.transactions,
+          total: data.total,
+          hasMore: data.hasMore,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to fetch transactions:", err);
+    } finally {
+      if (mountedRef.current) setRefreshing(false);
+    }
+  }, [address, filter]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    setHasCached(false);
+    setTxs([]);
+    setTotal(0);
+    loadInitial();
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [loadInitial]);
+
+  const handleLoadMore = async () => {
+    if (!address || loadingMore || !hasMore) return;
+    setLoadingMore(true);
+
+    try {
+      const nextPage = page + 1;
+      const data = await fetchTransactions(address, nextPage, PAGE_SIZE, filter);
+      if (mountedRef.current) {
+        setTxs((prev) => [...prev, ...data.transactions]);
+        setTotal(data.total);
+        setHasMore(data.hasMore);
+        setPage(nextPage);
+      }
+    } catch (err) {
+      console.error("Failed to load more transactions:", err);
+    } finally {
+      if (mountedRef.current) setLoadingMore(false);
+    }
+  };
+
+  const filters: { key: Filter; label: string }[] = [
+    { key: "all", label: "All" },
+    { key: "sent", label: "Sent" },
+    { key: "received", label: "Received" },
+  ];
+
+  const showSkeleton = !hasCached;
+
+  return (
+    <Layout title="Activity">
+      <div className="px-4 py-3 space-y-3">
+        {/* Filters */}
+        <div className="flex gap-2 items-center">
+          {filters.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => {
+                setFilter(key);
+                setPage(1);
+              }}
+              className={`led-text px-3.5 py-1.5 text-[10px] font-extrabold rounded-md border transition-all duration-200 ${
+                filter === key
+                  ? "bg-white text-surface-950 border-white"
+                  : "bg-transparent text-white/55 border-white/15 hover:border-white/35 hover:text-white"
+              }`}
+              style={
+                filter === key
+                  ? { boxShadow: "0 0 12px -2px rgba(255,255,255,0.4)" }
+                  : undefined
+              }
+            >
+              {label}
+            </button>
+          ))}
+          <div className="ml-auto flex items-center gap-2">
+            {refreshing && hasCached && (
+              <Spinner size="sm" className="!w-3 !h-3 !text-white/40" />
+            )}
+            {total > 0 && (
+              <span className="led-spec text-[10px]">
+                {total} total
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Transaction list */}
+        {showSkeleton ? (
+          <div className="flex items-center justify-center py-16">
+            <Spinner size="lg" />
+          </div>
+        ) : txs.length === 0 ? (
+          <div className="text-center py-16">
+            <div className="w-12 h-12 bg-white/[0.04] border border-white/[0.1] rounded-[3px] flex items-center justify-center mx-auto mb-3">
+              <svg className="w-6 h-6 text-white/35" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+              </svg>
+            </div>
+            <p className="led-text text-[11px] font-bold text-white/45">No transactions found</p>
+          </div>
+        ) : (
+          <>
+            <div className="card !p-2">
+              <div className="space-y-0.5">
+                {txs.map((tx, i) => (
+                  <TxItem key={`${tx.hash}-${i}`} tx={tx} symbolMap={symbolMap} />
+                ))}
+              </div>
+            </div>
+
+            {hasMore && (
+              <button
+                onClick={handleLoadMore}
+                disabled={loadingMore}
+                className="led-text w-full py-2.5 text-[11px] font-extrabold text-white/55 hover:text-white transition-colors flex items-center justify-center gap-2"
+              >
+                {loadingMore ? (
+                  <>
+                    <Spinner size="sm" />
+                    Loading...
+                  </>
+                ) : (
+                  "↓ Load more"
+                )}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </Layout>
+  );
+}
